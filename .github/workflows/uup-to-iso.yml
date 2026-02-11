@@ -328,26 +328,12 @@ jobs:
         run: |
           $isoPath = "${{ steps.find_iso.outputs.iso_path }}"
           Write-Host "Calculating MD5, SHA1, SHA256 for ISO: $isoPath"
-          $md5 = [System.Security.Cryptography.MD5]::Create()
-          $sha1 = [System.Security.Cryptography.SHA1]::Create()
-          $sha256 = [System.Security.Cryptography.SHA256]::Create()
-          $stream = [System.IO.File]::OpenRead($isoPath)
-          $buffer = New-Object byte[](1024 * 1024)
-          while (($bytesRead = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $md5.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-            $sha1.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-            $sha256.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-          }
-          $md5.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $sha1.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $sha256.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $stream.Close()
-          $md5Hash = [BitConverter]::ToString($md5.Hash).Replace("-", "").ToLower()
-          $sha1Hash = [BitConverter]::ToString($sha1.Hash).Replace("-", "").ToLower()
-          $sha256Hash = [BitConverter]::ToString($sha256.Hash).Replace("-", "").ToLower()
-          "md5=$md5Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "sha1=$sha1Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "sha256=$sha256Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $md5 = (Get-FileHash $isoPath -Algorithm MD5).Hash.ToLower()
+          $sha1 = (Get-FileHash $isoPath -Algorithm SHA1).Hash.ToLower()
+          $sha256 = (Get-FileHash $isoPath -Algorithm SHA256).Hash.ToLower()
+          "md5=$md5" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha1=$sha1" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Print final ESD indexes
         shell: powershell
@@ -386,26 +372,12 @@ jobs:
             exit 1
           }
           Write-Host "Calculating MD5, SHA1, SHA256 for ESD: $esdPath"
-          $md5 = [System.Security.Cryptography.MD5]::Create()
-          $sha1 = [System.Security.Cryptography.SHA1]::Create()
-          $sha256 = [System.Security.Cryptography.SHA256]::Create()
-          $stream = [System.IO.File]::OpenRead($esdPath)
-          $buffer = New-Object byte[](1024 * 1024)
-          while (($bytesRead = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $md5.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-            $sha1.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-            $sha256.TransformBlock($buffer, 0, $bytesRead, $buffer, 0) | Out-Null
-          }
-          $md5.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $sha1.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $sha256.TransformFinalBlock($buffer, 0, 0) | Out-Null
-          $stream.Close()
-          $md5Hash = [BitConverter]::ToString($md5.Hash).Replace("-", "").ToLower()
-          $sha1Hash = [BitConverter]::ToString($sha1.Hash).Replace("-", "").ToLower()
-          $sha256Hash = [BitConverter]::ToString($sha256.Hash).Replace("-", "").ToLower()
-          "esd_md5=$md5Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "esd_sha1=$sha1Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "esd_sha256=$sha256Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $md5 = (Get-FileHash $esdPath -Algorithm MD5).Hash.ToLower()
+          $sha1 = (Get-FileHash $esdPath -Algorithm SHA1).Hash.ToLower()
+          $sha256 = (Get-FileHash $esdPath -Algorithm SHA256).Hash.ToLower()
+          "esd_md5=$md5" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "esd_sha1=$sha1" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "esd_sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           
       - name: Generate unique release tag and date
         id: gen_tag
@@ -416,28 +388,54 @@ jobs:
           "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "release_name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Generate Release Description
-        id: build_desc
-        shell: pwsh
+      - name: Split ESD into parts
+        id: split_esd
+        shell: powershell
         run: |
           $esdPath = "${{ steps.rename_esd.outputs.final_esd_path }}"
+          if (-not (Test-Path $esdPath)) {
+            Write-Host "ERROR: ESD file not found at $esdPath"
+            exit 1
+          }
           $esdSize = (Get-Item $esdPath).Length
           $esdName = "${{ steps.rename_esd.outputs.final_esd_name }}"
+          $splitOutputDir = Split-Path $esdPath
+          $esdBaseName = [System.IO.Path]::GetFileNameWithoutExtension($esdName)
+          $splitArchiveName = "${esdBaseName}_parts"
+          $splitArchivePath = Join-Path $splitOutputDir "$splitArchiveName.zip"
+          Write-Host "Splitting ESD into 2000MB parts..."
+          Write-Host "ESD Path: $esdPath"
+          Write-Host "ESD Size: $([Math]::Round($esdSize / 1073741824, 2)) GB"
+          Write-Host "Archive name: $splitArchiveName"
+          try {
+            & "C:\Program Files\7-Zip\7z.exe" a -tzip -mx=${{ env.COMPRESSION_LEVEL }} -mmt=on $splitArchivePath -v2000m $esdPath
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "ERROR: 7-Zip compression failed with exit code: $LASTEXITCODE"
+              exit 1
+            }
+          } catch {
+            Write-Host "ERROR: Failed to split ESD: $_"
+            exit 1
+          }
+          $splitPattern = "${splitArchiveName}.zip.00*"
+          $parts = Get-ChildItem -Path $splitOutputDir -Filter $splitPattern | Sort-Object Name
+          if ($parts.Count -eq 0) {
+            Write-Host "ERROR: No split files found with pattern: $splitPattern"
+            exit 1
+          }
+          Write-Host "Split ESD parts created:"
+          $parts | ForEach-Object { Write-Host " - $($_.Name) ($([Math]::Round($_.Length / 1MB, 2)) MB)" }
+          $sizeGB = [Math]::Round($esdSize / 1073741824, 2)
           $isoSizeBytes = [int64] "${{ steps.find_iso.outputs.iso_size }}"
           $isoSizeGB = [Math]::Round($isoSizeBytes / 1GB, 2)
-          $sizeGB = [Math]::Round($esdSize / 1073741824, 2)
           $workflowRunUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           $desc = @"
+
           ### **Build Date**: ``$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')``
-          ### **⚡Download Complete ISO or ESD in one zip file (need extract)**: [``from this build Action Run``]($workflowRunUrl)
-          
-          > [!IMPORTANT]
-          > **⚠️ MAJOR REQUIREMENT:** You must be **SIGNED INTO GITHUB** to see the **DOWNLOAD ICON** from the above link. If you don't sign in, That's a skill issue, not a bug 💀
-          
-          ---
+          ### **⚡Download Complete ISO or ESD in one zip file (need extract)**: [``from this build Action Run``]($workflowRunUrl)      
           ### ISO File Details:
-          - **Name**: ``${{ steps.find_iso.outputs.iso_name }}``
+          - **Name**: ``"${{ steps.find_iso.outputs.iso_name }}"``
           - **MD5**: ``${{ steps.iso_hashes.outputs.md5 }}``
           - **SHA1**: ``${{ steps.iso_hashes.outputs.sha1 }}``
           - **SHA256**: ``${{ steps.iso_hashes.outputs.sha256 }}``
@@ -450,27 +448,163 @@ jobs:
           - **SHA256**: ``${{ steps.esd_hashes.outputs.esd_sha256 }}``
           - **Size**: ``$sizeGB GB ($esdSize bytes)``
           
-          ---
-          ## ☁️ Google Drive Direct Links ⚡
-          | 📂 **RELEASE FOLDER** | 💿 **ISO FILE** | 📦 **ESD FILE** |
-          | :---: | :---: | :---: |
-          | [![Open Folder](https://img.shields.io/badge/OPEN_FOLDER-4285F4?style=for-the-badge&logo=googledrive&logoColor=white)]({{GDRIVE_FOLDER}}) | [![Download ISO](https://img.shields.io/badge/DOWNLOAD_ISO-FF5722?style=for-the-badge&logo=idk&logoColor=white)]({{GDRIVE_ISO}}) | [![Download ESD](https://img.shields.io/badge/DOWNLOAD_ESD-8A2BE2?style=for-the-badge&logo=idk&logoColor=white)]({{GDRIVE_ESD}}) |
+          ## ESD Part List (Download from here):
+          
           "@
           
-          $descPath = "${{ runner.temp }}\desc.txt"
-          [System.IO.File]::WriteAllText($descPath, $desc, [System.Text.Encoding]::UTF8)
-          echo "desc_path=$descPath" >> $env:GITHUB_OUTPUT
+          $desc += ($parts | ForEach-Object { "- **[``$($_.Name)``](https://github.com/$env:GITHUB_REPOSITORY/releases/download/${{ steps.gen_tag.outputs.release_tag }}/$($_.Name)) - $([Math]::Round($_.Length / 1MB, 2)) MB**" }) -join "`n"
+          
+          $desc += @"
+          
+          ## Extraction Instructions:
+          - ### Download all ESD parts
+          - ### Use 7-Zip or WinRAR to extract: Right-click on ``$($parts[0].Name)`` -> Extract Here
+          - ### The full ESD will be extracted automatically
+          
+          ## One-Click Extraction
+          Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the esd image in the Download folder.
 
-      - name: Create GitHub Release
-        shell: pwsh
+          - ### Windows ( CMD )
+          ```
+          curl -LO https://github.com/$env:GITHUB_REPOSITORY/releases/download/${{ steps.gen_tag.outputs.release_tag }}/extractor.cmd && extractor.cmd
+          ```
+          - ### Android ( Termux )
+          ```
+          curl -LO https://github.com/$env:GITHUB_REPOSITORY/releases/download/${{ steps.gen_tag.outputs.release_tag }}/extractor.sh && chmod +x extractor.sh && ./extractor.sh
+          ```
+          
+          "@
+          
+          $descPath = Join-Path $splitOutputDir "release_description.txt"
+          Set-Content -Path $descPath -Value $desc -Encoding utf8
+          echo "split_dir=$splitOutputDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          echo "split_pattern=$splitPattern" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          echo "parts_count=$($parts.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $firstPart = $parts[0].Name
+          $zip001Url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/${{ steps.gen_tag.outputs.release_tag }}/$firstPart"
+          if ($zip001Url) { "zip001_url=$zip001Url" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
+
+      - name: Generate Windows extractor.cmd
+        shell: powershell
         run: |
+          $url = "${{ steps.split_esd.outputs.zip001_url }}"
+
+          $cmd = @"
+          @echo off
+          setlocal EnableDelayedExpansion
+
+          :: Auto elevate
+          net session >nul 2>&1 || (
+          powershell -Command "Start-Process '%~f0' -Verb RunAs"
+          exit /b
+          )
+
+          set ZIP001=$url
+          set WKDIR=%USERPROFILE%\Downloads
+          set DL=%WKDIR%\dl
+          set TOOLS=%WKDIR%\tools
+          mkdir "%DL%" "%TOOLS%" >nul 2>&1
+
+          set SEVENZIP=%TOOLS%\7zr.exe
+          if not exist "%SEVENZIP%" (
+          echo Downloading 7-Zip...
+          curl -L -o "%SEVENZIP%" https://www.7-zip.org/a/7zr.exe || exit /b 1
+          )
+
+          for %%A in ("%ZIP001%") do set FILE=%%~nxA
+          set BASE=%ZIP001%
+          set EXT=%FILE:~-4%
+
+          if /I "%EXT%"==".001" set BASE=%ZIP001:.001=%
+          if /I "%EXT%"==".z01" set BASE=%ZIP001:.z01=%
+
+          set i=1
+          :dl
+          set p=00%i%
+          set p=!p:~-3!
+          if /I "%EXT%"==".z01" set p=z!p:~-2!
+
+          curl -f -L -C - "%BASE%.!p!" -o "%DL%\%FILE:~0,-4%.!p!" || goto extract
+
+          set /a i+=1
+          goto dl
+
+          :extract
+          "%SEVENZIP%" x "%DL%\%FILE%" -o"%DL%" -y
+          echo Done.
+          pause
+          "@
+
+          Set-Content extractor.cmd $cmd -Encoding ASCII
+
+      - name: Generate Termux extractor.sh
+        shell: bash
+        run: |
+          URL="${{ steps.split_esd.outputs.zip001_url }}"
+
+          cat > extractor.sh <<EOF
+          #!/data/data/com.termux/files/usr/bin/bash
+          set -e
+
+          ZIP001="$URL"
+          DL="\$PWD/dl"
+          mkdir -p "\$DL"
+
+          ! command -v 7z >/dev/null 2>&1 && pkg update -y && pkg install -y p7zip curl
+
+          NAME=\$(basename "\$ZIP001")
+          BASE="\${ZIP001%.001}"
+          [ "\${NAME: -4}" = ".z01" ] && BASE="\${ZIP001%.z01}"
+
+          for i in \$(seq 1 10); do
+           p=\$(printf "%03d" \$i)
+           [ "\${NAME: -4}" = ".z01" ] && p="z\${p: -2}"
+           PART_URL="\$BASE.\$p"
+           PART_FILE="\$DL/\${NAME%.*}.\$p"
+           echo "Downloading \$PART_URL ..."
+           if ! curl -fL -C - "\$PART_URL" -o "\$PART_FILE"; then
+            break
+           fi
+          done
+  
+          7z x "\$DL/\${NAME%.*}.001" -o"\$DL" -y
+          echo "Done. Extracted to \$DL"
+          
+          echo "Copy windows image to Download folder"
+          FILE=\$(find "\$DL" -maxdepth 1 -type f ! -name "*.00?" ! -name "*.z??" | head -1)
+          [ -n "\$FILE" ] && rsync -ah --progress "\$FILE" "/storage/emulated/0/Download/" 2>/dev/null &&
+           echo "Copied" && rm -rf "\$DL" || { echo "Failed to copy"; exit 1; }
+          EOF 
+          chmod +x extractor.sh
+
+      - name: Create GitHub Release and upload split ESD parts
+        shell: powershell
+        run: |
+          $splitDir = "${{ steps.split_esd.outputs.split_dir }}"
+          $splitPattern = "${{ steps.split_esd.outputs.split_pattern }}"
           $releaseTag = "${{ steps.gen_tag.outputs.release_tag }}"
           $releaseName = "${{ steps.gen_tag.outputs.release_name }}"
-          $descPath = "${{ steps.build_desc.outputs.desc_path }}"
-          $body = [System.IO.File]::ReadAllText($descPath, [System.Text.Encoding]::UTF8)
-          $cleanBodyPath = "initial_release_body.txt"
-          [System.IO.File]::WriteAllText($cleanBodyPath, $body, [System.Text.Encoding]::UTF8)
-          & gh release create $releaseTag --title "Build - $releaseName" --notes-file $cleanBodyPath
+          $parts = Get-ChildItem -Path $splitDir -Filter $splitPattern | Sort-Object Name
+          if ($parts.Count -eq 0) {
+            Write-Host "ERROR: No split files found"
+            exit 1
+          }
+          Write-Host "Creating release: $releaseName"
+          Write-Host "Uploading $($parts.Count) ESD parts"
+          $descPath = Join-Path $splitDir "release_description.txt"
+          $body = if (Test-Path $descPath) { Get-Content $descPath -Raw } else { "Build Release" }
+          $fileArgs = @()
+          $fileArgs += $parts | ForEach-Object { $_.FullName }
+          $fileArgs += "extractor.cmd"
+          $fileArgs += "extractor.sh"
+          & gh release create $releaseTag `
+            --title "Build - $releaseName" `
+            --notes $body `
+            $fileArgs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Failed to create release"
+            exit 1
+          }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

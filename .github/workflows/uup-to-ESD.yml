@@ -1,0 +1,256 @@
+name: UUP to ESD Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      uup_url:
+        required: true
+        description: UUP ZIP URL
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Work Directory
+        shell: powershell
+        run: |
+          $dir = "${{ runner.temp }}\work"
+          mkdir $dir -Force | Out-Null
+          echo "WORK=$dir" >> $env:GITHUB_ENV
+
+      - name: Download UUP ZIP
+        shell: powershell
+        run: |
+          Invoke-WebRequest "${{ github.event.inputs.uup_url }}" -OutFile "$env:WORK\uup.zip"
+
+      - name: Extract UUP
+        shell: powershell
+        run: |
+          Expand-Archive "$env:WORK\uup.zip" "$env:WORK\uup"
+
+      - name: Build ISO
+        shell: powershell
+        run: |
+          cd "$env:WORK\uup"
+          .\uup_download_windows.cmd
+
+      - name: Locate ISO
+        id: iso
+        shell: powershell
+        run: |
+          $iso = Get-ChildItem "$env:WORK\uup" -Recurse -Filter *.iso | Select-Object -First 1
+          echo "ISO=$($iso.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Extract install image
+        id: img
+        shell: powershell
+        run: |
+          & "C:\Program Files\7-Zip\7z.exe" x "${{ steps.iso.outputs.ISO }}" sources\install.wim sources\install.esd -o"$env:WORK\iso" -y
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $f = dir "$env:WORK\iso\sources\install.*" -ea 0 | select -f 1; if(!$f){exit 1}
+          echo "FILE=$($f.FullName)" >> $env:GITHUB_OUTPUT
+          echo "EXT=$($f.Extension.TrimStart('.'))" >> $env:GITHUB_OUTPUT
+
+      - name: Convert WIM → Multi-Index Compressed ESD
+        id: convert
+        shell: powershell
+        run: |
+          $src = "${{ steps.img.outputs.FILE }}"
+          $ext = "${{ steps.img.outputs.EXT }}"
+          $out = "$env:WORK\install.esd"
+
+          if ($ext -eq "wim") {
+            $indexes = dism /Get-WimInfo /WimFile:"$src" |
+              Select-String "^Index : " |
+              ForEach-Object { ($_ -split ':')[1].Trim() }
+
+            foreach ($i in $indexes) {
+              dism /Export-Image `
+                /SourceImageFile:"$src" `
+                /SourceIndex:$i `
+                /DestinationImageFile:"$out" `
+                /Compress:recovery `
+                /CheckIntegrity `
+                /Append
+            }
+          }
+          else {
+            Copy-Item "$src" "$out" -Force
+          }
+
+          echo "FINAL=$out" >> $env:GITHUB_OUTPUT
+
+      - name: Generate Microsoft ISO Name
+        id: name
+        shell: powershell
+        run: |
+          $iso = "${{ steps.iso.outputs.ISO }}"
+          $base = [System.IO.Path]::GetFileNameWithoutExtension($iso)
+          $final = "$base"
+          echo "NAME=$final" >> $env:GITHUB_OUTPUT
+
+      - name: Rename ESD
+        shell: powershell
+        run: |
+         Rename-Item "$env:WORK\install.esd" `
+           "${{ steps.name.outputs.NAME }}.esd"
+
+      - name: Generate SHA256
+        shell: powershell
+        run: |
+          cd "$env:WORK"
+          Get-FileHash -Path "${{ steps.name.outputs.NAME }}.esd" -Algorithm SHA256 | Select-Object -ExpandProperty Hash | Out-File -FilePath SHA256.txt
+
+      - name: Split ESD into ZIP parts
+        id: split_esd
+        shell: powershell
+        run: |
+          cd "$env:WORK"
+          7z a -tzip "${{ steps.name.outputs.NAME }}.zip" `
+            "${{ steps.name.outputs.NAME }}.esd" `
+            -v2000m
+
+          $part = Get-ChildItem *.zip.001 | Select-Object -First 1
+          echo "zip001_url=https://github.com/${{ github.repository }}/releases/download/${{ steps.name.outputs.NAME }}/$($part.Name)" >> $env:GITHUB_OUTPUT
+
+      # ============================
+      # ✅ YOUR EXACT CMD EXTRACTOR
+      # ============================
+      - name: Generate Windows extractor.cmd
+        shell: powershell
+        run: |
+          $url = "${{ steps.split_esd.outputs.zip001_url }}"
+
+          $cmd = @"
+          @echo off
+          setlocal EnableDelayedExpansion
+
+          :: Auto elevate
+          net session >nul 2>&1 || (
+          powershell -Command "Start-Process '%~f0' -Verb RunAs"
+          exit /b
+          )
+
+          set ZIP001=$url
+          set WKDIR=%USERPROFILE%\Downloads
+          set DL=%WKDIR%\dl
+          set TOOLS=%WKDIR%\tools
+          mkdir "%DL%" "%TOOLS%" >nul 2>&1
+
+          set SEVENZIP=%TOOLS%\7zr.exe
+          if not exist "%SEVENZIP%" (
+          echo Downloading 7-Zip...
+          curl -L -o "%SEVENZIP%" https://www.7-zip.org/a/7zr.exe || exit /b 1
+          )
+
+          for %%A in ("%ZIP001%") do set FILE=%%~nxA
+          set BASE=%ZIP001%
+          set EXT=%FILE:~-4%
+
+          if /I "%EXT%"==".001" set BASE=%ZIP001:.001=%
+          if /I "%EXT%"==".z01" set BASE=%ZIP001:.z01=%
+
+          set i=1
+          :dl
+          set p=00%i%
+          set p=!p:~-3!
+          if /I "%EXT%"==".z01" set p=z!p:~-2!
+
+          curl -f -L -C - "%BASE%.!p!" -o "%DL%\%FILE:~0,-4%.!p!" || goto extract
+
+          set /a i+=1
+          goto dl
+
+          :extract
+          "%SEVENZIP%" x "%DL%\%FILE%" -o"%DL%" -y
+          echo Done.
+          pause
+          "@
+
+          Set-Content "$env:WORK\extractor.cmd" $cmd -Encoding ASCII
+
+      # ============================
+      # ✅ YOUR EXACT TERMUX SCRIPT
+      # ============================
+      - name: Generate Termux extractor.sh
+        shell: bash
+        run: |
+          URL="${{ steps.split_esd.outputs.zip001_url }}"
+          cat > "$WORK/extractor.sh" <<EOF
+          #!/data/data/com.termux/files/usr/bin/bash
+          set -e
+          ZIP001="$URL"
+          DL="\$PWD/dl"
+          mkdir -p "\$DL"
+
+          ! command -v 7z >/dev/null 2>&1 && pkg update -y && pkg install -y p7zip curl
+
+          NAME=\$(basename "\$ZIP001")
+          BASE="\${ZIP001%.001}"
+          [ "\${NAME: -4}" = ".z01" ] && BASE="\${ZIP001%.z01}"
+
+          for i in \$(seq 1 10); do
+           p=\$(printf "%03d" \$i)
+           [ "\${NAME: -4}" = ".z01" ] && p="z\${p: -2}"
+           PART_URL="\$BASE.\$p"
+           PART_FILE="\$DL/\${NAME%.*}.\$p"
+           echo "Downloading \$PART_URL ..."
+           if ! curl -fL -C - "\$PART_URL" -o "\$PART_FILE"; then
+            break
+           fi
+          done
+  
+          7z x "\$DL/\${NAME%.*}.001" -o"\$DL" -y
+          echo "Done. Extracted to \$DL"
+          
+          echo "Copy windows image to Download folder"
+          FILE=\$(find "\$DL" -maxdepth 1 -type f ! -name "*.00?" ! -name "*.z??" | head -1)
+          [ -n "\$FILE" ] && rsync -ah --progress "\$FILE" "/storage/emulated/0/Download/" &&
+           echo "Copied" && rm -rf "\$DL" || { echo "Failed to copy"; exit 1; }
+          EOF 
+          chmod +x "$WORK/extractor.sh"
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$env:WORK"
+          $name = "${{ steps.name.outputs.NAME }}"
+          $zipParts = Get-ChildItem "$env:WORK\$name.zip.*"
+          if (-not $zipParts) { throw "No zip parts found" }
+          $required = @("extractor.cmd","extractor.sh")
+          foreach ($f in $required) {
+            if (-not (Test-Path "$env:WORK\$f")) { throw "Missing $f" }
+          }
+          $notes = "## $name"
+          $hash = Get-Content "$env:WORK\SHA256.txt"
+          $notes += "`n`n### SHA256 Checksum`n$hash`n"
+          $repo = "${{ github.repository }}"
+          $tag = "${{ steps.name.outputs.NAME }}"
+          $notes += @"
+          ## One-Click Extraction
+          Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the ESD image into your Download folder.
+          - ### Windows ( CMD )
+          ```
+          curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
+          ```
+          - ### Android (Termux )
+          ```
+          curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
+          ``` 
+          "@
+          
+          gh release create "${{ steps.name.outputs.NAME }}" `
+            $zipParts.FullName `
+            "$env:WORK\extractor.cmd" `
+            "$env:WORK\extractor.sh" `
+            --title "${{ steps.name.outputs.NAME }}" `
+            --notes "$notes" `
+            --repo "${{ github.repository }}"
+        
