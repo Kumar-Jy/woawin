@@ -142,10 +142,14 @@ jobs:
           set TOOLS=%WKDIR%\tools
           mkdir "%DL%" "%TOOLS%" >nul 2>&1
 
-          set SEVENZIP=%TOOLS%\7zr.exe
-          if not exist "%SEVENZIP%" (
-          echo Downloading 7-Zip...
-          curl -L -o "%SEVENZIP%" https://www.7-zip.org/a/7zr.exe || exit /b 1
+          set "SEVENZR=%TOOLS%\7zr.exe"
+          set "SEVENZA=%TOOLS%\7za.exe"
+          set "EXTRA=%TOOLS%\7zextra.7z"
+
+          if not exist "%SEVENZR%" curl -L -o "%SEVENZR%" https://www.7-zip.org/a/7zr.exe || exit /b
+          if not exist "%SEVENZA%" (
+              curl -L -o "%EXTRA%" https://www.7-zip.org/a/7z2600-extra.7z || exit /b
+              "%SEVENZR%" x "%EXTRA%" -o"%TOOLS%" -y || exit /b
           )
 
           for %%A in ("%ZIP001%") do set FILE=%%~nxA
