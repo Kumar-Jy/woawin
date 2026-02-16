@@ -216,7 +216,7 @@ jobs:
           FILE=\$(find "\$DL" -maxdepth 1 -type f ! -name "*.00?" ! -name "*.z??" | head -1)
           [ -n "\$FILE" ] && rsync -ah --progress "\$FILE" "/storage/emulated/0/Download/" &&
            echo "Copied" && rm -rf "\$DL" || { echo "Failed to copy"; exit 1; }
-          EOF 
+          `EOF`
           chmod +x "$WORK/extractor.sh"
 
       - name: Create GitHub Release
@@ -238,16 +238,17 @@ jobs:
           $repo = "${{ github.repository }}"
           $tag = "${{ steps.name.outputs.NAME }}"
           $notes += @"
+          ---
           ## One-Click Extraction
-          Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the ESD image into your Download folder.
+          ### Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the ESD image into your Download folder.
           - ### Windows ( CMD )
-          - `````cmd
-          - curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
-          - `````
+          `````cmd
+          curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
+          `````
           - ### Android (Termux )
-          - `````bash
-          - curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
-          - `````
+          `````bash
+          curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
+          `````
           "@
           
           gh release create "${{ steps.name.outputs.NAME }}" `
