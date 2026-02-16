@@ -192,7 +192,7 @@ jobs:
           DL="\$PWD/dl"
           mkdir -p "\$DL"
 
-          ! command -v 7z >/dev/null 2>&1 && pkg update -y && pkg install -y p7zip curl
+          ! command -v 7z >/dev/null 2>&1 && pkg update -y && pkg install -y x11-repo p7zip curl rsync jq bc
 
           NAME=\$(basename "\$ZIP001")
           BASE="\${ZIP001%.001}"
@@ -241,13 +241,13 @@ jobs:
           ## One-Click Extraction
           Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the ESD image into your Download folder.
           - ### Windows ( CMD )
-          ```
-          curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
-          ```
+          - `````cmd
+          - curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
+          - `````
           - ### Android (Termux )
-          ```
-          curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
-          ``` 
+          - `````bash
+          - curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
+          - `````
           "@
           
           gh release create "${{ steps.name.outputs.NAME }}" `
