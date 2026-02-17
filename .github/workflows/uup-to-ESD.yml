@@ -117,10 +117,7 @@ jobs:
 
           $part = Get-ChildItem *.zip.001 | Select-Object -First 1
           echo "zip001_url=https://github.com/${{ github.repository }}/releases/download/${{ steps.name.outputs.NAME }}/$($part.Name)" >> $env:GITHUB_OUTPUT
-
-      # ============================
-      # ✅ YOUR EXACT CMD EXTRACTOR
-      # ============================
+    
       - name: Generate Windows extractor.cmd
         shell: powershell
         run: |
@@ -178,9 +175,6 @@ jobs:
 
           Set-Content "$env:WORK\extractor.cmd" $cmd -Encoding ASCII
 
-      # ============================
-      # ✅ YOUR EXACT TERMUX SCRIPT
-      # ============================
       - name: Generate Termux extractor.sh
         shell: bash
         run: |
@@ -242,11 +236,11 @@ jobs:
           ## One-Click Extraction
           ### Copy and paste this in the cmd/termux terminal and wait, it will automatically download and extract the ESD image into your Download folder.
           - ### Windows ( CMD )
-          `````cmd
+          `````
           curl -LO https://github.com/$repo/releases/download/$tag/extractor.cmd && extractor.cmd
           `````
           - ### Android (Termux )
-          `````bash
+          `````
           curl -LO https://github.com/$repo/releases/download/$tag/extractor.sh && chmod +x extractor.sh && ./extractor.sh
           `````
           "@
